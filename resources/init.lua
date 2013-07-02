@@ -7,17 +7,59 @@ local Timer = require 'Timer'
 local DynO = require 'DynO'
 local ATLAS = 'resources/default'
 
-local Player = oo.class(DynO)
-function Player:init(pos)
-   DynO.init(self, pos)
-   self.dim = 64
-   self.gfx = self.go:add_component('CTestDisplay',
-                                    {w=self.dim,
-                                     h=self.dim})
-   self.speed = 100
-   self.max_impulse = 90
-   self.steering = world:create_object('Steering')
+local Stars
+local Thruster
+local Player
+local Gun
+local Bullet
+local SimpletonBrain
+local Pawn
+local Spawner
+local Explosion
+local ExplosionManager
+local exploder
 
+Stars = oo.class(oo.Object)
+function Stars:init(go)
+   local _art = world:atlas_entry(ATLAS, 'star')
+   local params =
+      {def=
+          {n=200,
+           layer=constant.BACKDROP,
+           renderer={name='PSC_E2SystemRenderer',
+                     params={entry=_art}},
+           components={
+              {name='PSConstantAccelerationUpdater',
+               params={acc={0, 0}}},
+              {name='PSBoxInitializer',
+               params={initial={-_art.w, -_art.h,
+                                screen_width + _art.w,
+                                screen_height + _art.h},
+                       refresh={-_art.w, screen_height + _art.h,
+                                screen_width + _art.w, screen_height + _art.h},
+                       minv={0, 0},
+                       maxv={0, 0}}},
+              {name='PSRandColorInitializer',
+               params={min_color={0.8, 0.8, 0.8, 0.2},
+                       max_color={1.0, 1.0, 1.0, 1.0}}},
+              {name='PSRandScaleInitializer',
+               params={min_scale=0.2,
+                       max_scale=0.6}},
+              {name='PSBoxTerminator',
+               params={rect={-_art.w*2, -_art.h*2,
+                             screen_width + _art.w * 2,
+                             screen_height + _art.h * 2}}}}}}
+   local system = go:add_component('CParticleSystem', params)
+   self.psbox = system:def():find_component('PSBoxInitializer')
+end
+
+function Stars:set_vel(mnvel, mxvel)
+   self.psbox:minv(mnvel)
+   self.psbox:maxv(mxvel)
+end
+
+Thruster = oo.class(oo.Object)
+function Thruster:init(go, dimx, dimy)
    local _smoke = world:atlas_entry(ATLAS, 'steam')
    local params =
       {def=
@@ -46,40 +88,249 @@ function Player:init(pos)
                        max_life=0.4}},
               {name='PSTimeTerminator'}}}}
 
-   local system = self.go:add_component('CParticleSystem', params)
+   local system = go:add_component('CParticleSystem', params)
    local activator = system:def():find_component('PSConstantRateActivator')
    local psbox = system:def():find_component('PSBoxInitializer')
+
+   self.dimx = dimx
+   self.dimy = dimy
    self.activator = activator
    self.psbox = psbox
 end
 
-function Player:set_flame(dir, rate)
+function Thruster:set_flame(dir, rate)
    local rect = nil
    local vel = nil
    local s = 4
    local v = 1000
-   local dim2 = self.dim / 2
+   local dx2 = self.dimx / 2
+   local dy2 = self.dimy / 2
+
    if dir[1] > 0 then
-      rect = {dim2 - s, -dim2, dim2 + s, dim2}
+      rect = {dx2 - s, -dy2, dx2 + s, dy2}
       vel = {v, 0}
    elseif dir[1] < 0 then
-      rect = {-dim2 - s, -dim2, -dim2 + s, dim2}
+      rect = {-dx2 - s, -dy2, -dx2 + s, dy2}
       vel = {-v, 0}
    elseif dir[2] > 0 then
-      rect = {-dim2, dim2 - s, dim2, dim2 + s}
+      rect = {-dx2, dy2 - s, dx2, dy2 + s}
       vel = {0, v}
    elseif dir[2] < 0 then
-      rect = {-dim2, -dim2 - s, dim2, -dim2 + s}
+      rect = {-dx2, -dy2 - s, dx2, -dy2 + s}
       vel = {0, -v}
    end
 
-   if rate > 0 then
+   if rect and vel then
       self.psbox:initial(rect)
       self.psbox:refresh(rect)
       self.psbox:minv(vel)
       self.psbox:maxv(vel)
    end
    self.activator:rate(rate)
+end
+
+Explosion = oo.class(oo.Object)
+function Explosion:init(lifetime)
+   self.lifetime = lifetime
+
+   local _smoke = world:atlas_entry(ATLAS, 'steam')
+   local params =
+      {def=
+          {n=50,
+           renderer={name='PSC_E2SystemRenderer',
+                     params={entry=_smoke}},
+           activator={name='PSConstantRateActivator',
+                      params={rate=0}},
+           components={
+              {name='PSConstantAccelerationUpdater',
+               params={acc={0,0}}},
+              {name='PSTimeAlphaUpdater',
+               params={time_constant=0.4,
+                       max_scale=1.0}},
+              {name='PSFireColorUpdater',
+               params={max_life=0.3,
+                       start_temperature=9000,
+                       end_temperature=500}},
+              {name='PSBoxInitializer',
+               params={initial={-16,-34,16,-30},
+                       refresh={-16,-34,16,-30},
+                       minv={0,0},
+                       maxv={0,0}}},
+              {name='PSTimeInitializer',
+               params={min_life=0.2,
+                       max_life=0.4}},
+              {name='PSTimeTerminator'}}}}
+
+   local system = stage:add_component('CParticleSystem', params)
+   local activator = system:def():find_component('PSConstantRateActivator')
+   local psbox = system:def():find_component('PSBoxInitializer')
+
+   self.activator = activator
+   self.psbox = psbox
+   self.timer = Timer()
+end
+
+function Explosion:activate(center, w, h, speed)
+   local rect = {center[1] - w/2, center[2] - h/2, center[1] + w/2, center[2] + h/2}
+   self.psbox:initial(rect)
+   self.psbox:refresh(rect)
+   self.psbox:minv({-speed, -speed})
+   self.psbox:maxv({speed, speed})
+   self.activator:rate(1000)
+   local term = function()
+      self.activator:rate(0)
+   end
+   self.timer:reset(self.lifetime, term)
+end
+
+ExplosionManager = oo.class(oo.Object)
+function ExplosionManager:init(n, dim, speed)
+   self.systems = {}
+   self.dim = dim
+   self.speed = speed
+
+   for i = 1,n do
+      table.insert(self.systems, Explosion(0.2))
+   end
+end
+
+function ExplosionManager:explode(pos)
+   local expl = table.remove(self.systems, 1)
+   expl:activate(pos, self.dim, self.dim, self.speed)
+   table.insert(self.systems, expl)
+end
+
+local function terminate_if_offscreen(self)
+   local fuzz = 128
+   local pos = self.go:pos()
+
+   -- kill on screen exit
+   if pos[1] > screen_width + fuzz or pos[1] < -fuzz or pos[2] > screen_height + fuzz or pos[2] < -fuzz then
+      self:terminate()
+   end
+end
+
+SimpletonBrain = oo.class(oo.Object)
+
+function SimpletonBrain:init(tgt_vel, max_force)
+   self.tgt_vel = tgt_vel
+   self.max_force = max_force or 10
+end
+
+function SimpletonBrain:update(obj)
+   local go = obj.go
+   local pos = go:pos()
+   local vel = vector.new(go:vel())
+
+   local dv = self.tgt_vel - vel
+   if dv:length() > self.max_force then
+      dv = dv:norm() * self.max_force
+   end
+   go:apply_force(dv)
+end
+
+Bullet = oo.class(DynO)
+
+function Bullet:init(pos, opts)
+   DynO.init(self, pos)
+
+   self.go:add_component('CTestDisplay', {w=8,h=8})
+   self.brain = opts.brain
+   self:add_sensor({fixture={type='rect',
+                             w=8, h=8,
+                             density=opts.density,
+                             sensor=true}})
+   self.timer = Timer(self.go)
+   self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
+end
+
+function Bullet:update()
+   self.brain:update(self)
+   terminate_if_offscreen(self)
+end
+
+function Bullet:colliding_with(other)
+   -- we're a sensor so we need to hand off this message
+   other:colliding_with(self)
+end
+
+Gun = oo.class(oo.Object)
+
+function Gun:init(bullet_kind)
+   self.bullet_kind = bullet_kind or Bullet
+   self.bubble_force = 100
+   self.bullet_density = 1
+   self.hz = 10
+   self.timer = Timer(stage)
+   self.make_bullet_brain = function()
+      return SimpletonBrain({0, 500}, self.bubble_force)
+   end
+end
+
+function Gun:fire(owner)
+   local shoot = function()
+      self.bullet_kind(owner.go:pos(),
+                       {density=self.bullet_density,
+                        brain=self.make_bullet_brain()})
+   end
+   self.timer:maybe_set(1.0 / self.hz, shoot)
+end
+
+Pawn = oo.class(DynO)
+function Pawn:init(pos)
+   DynO.init(self, pos)
+
+   self.go:add_component('CTestDisplay', {w=16,h=16})
+   self.brain = SimpletonBrain({0, -200}, 10)
+   self:add_collider({fixture={type='rect', w=16, h=16}})
+end
+
+function Pawn:update()
+   self.brain:update(self)
+   terminate_if_offscreen(self)
+end
+
+function Pawn:colliding_with(other)
+   if other:is_a(Bullet) then
+      exploder:explode(self.go:pos())
+      self:terminate()
+      other:terminate()
+   end
+end
+
+Spawner = oo.class(oo.Object)
+function Spawner:init(rate, mix)
+   self.rate = rate
+   self.mix = mix
+   self.timer = Timer()
+   self:reset()
+end
+
+function Spawner:reset()
+   local next_time = util.rand_exponential(self.rate)
+   self.timer:reset(next_time, self:bind('spawn'))
+end
+
+function Spawner:spawn()
+   -- for now, just spawn at the top of the screen
+   local e = util.rand_choice(self.mix)
+   e({util.rand_between(0,screen_width), screen_height})
+
+   self:reset()
+end
+
+Player = oo.class(DynO)
+function Player:init(pos)
+   DynO.init(self, pos)
+   self.dim = 64
+   self.gfx = self.go:add_component('CTestDisplay',
+                                    {w=self.dim,
+                                     h=self.dim})
+   self.speed = 300
+   self.steering = world:create_object('Steering')
+   self.lr_thruster = Thruster(self.go, self.dim, 16)
+   self.ud_thruster = Thruster(self.go, 16, self.dim)
+   self.gun = Gun()
 end
 
 function Player:update()
@@ -91,8 +342,8 @@ function Player:update()
    local steering = self.steering
 
    local params = {
-      force_max = 1000,
-      speed_max = 100,
+      force_max = 10000,
+      speed_max = self.speed,
       old_angle = 0,
       application_time = world:dt()
    }
@@ -102,14 +353,24 @@ function Player:update()
    steering:apply_desired_velocity(desired_vel, go:vel())
    steering:complete()
 
-   if desired_vel:length() > 0 then
-      local zero = vector.new({0,0})
-      self:set_flame(zero-desired_vel, 10000)
+   local zero = vector.new({0,0})
+   if math.abs(desired_vel[1]) > 0 then
+      self.lr_thruster:set_flame({-desired_vel[1],0}, 10000)
    else
-      self:set_flame({0,0}, 0)
+      self.lr_thruster:set_flame({0,0}, 0)
+   end
+
+   if math.abs(desired_vel[2]) > 0 then
+      self.ud_thruster:set_flame({0,-desired_vel[2]}, 10000)
+   else
+      self.ud_thruster:set_flame({0,0}, 0)
    end
 
    go:apply_force(steering:force())
+
+   if input.action1 then
+      self.gun:fire(self)
+   end
 end
 
 local czor = world:create_object('Compositor')
@@ -125,5 +386,11 @@ function level_init()
    local cam = stage:find_component('Camera', nil)
    cam:pre_render(util.fthread(background))
 
-   Player({screen_width/2, screen_height/2})
+   local player = Player({screen_width/2, screen_height/2})
+   local spawner = Spawner(1, {Pawn})
+
+   local stars = Stars(stage)
+   stars:set_vel({0, -20}, {0, -10})
+
+   exploder = ExplosionManager(5, 16, 100)
 end
