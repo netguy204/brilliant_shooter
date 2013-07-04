@@ -245,8 +245,8 @@ function BThruster:init()
                params={time_constant=0.4,
                        max_scale=1.0}},
               {name='PSRandColorInitializer',
-               params={min_color={0.6, 0.6, 0.8, 0.8},
-                       max_color={0.6, 0.6, 1.0, 1.0}}},
+               params={min_color={0.4, 0.4, 0.8, 0.8},
+                       max_color={0.4, 0.4, 1.0, 1.0}}},
               {name='PSBoxInitializer',
                params={initial={-16,-34,16,-30},
                        refresh={-16,-34,16,-30},
@@ -368,11 +368,15 @@ Bullet = oo.class(DynO)
 function Bullet:init(pos, opts)
    DynO.init(self, pos)
 
+   local _art = world:atlas_entry(ATLAS, 'bullet')
+   self.dimx = _art.w
+   self.dimy = _art.h
+
    local go = self:go()
-   go:add_component('CTestDisplay', {w=8,h=8})
+   self.sprite = go:add_component('CStaticSprite', {entry=_art})
    self.brain = opts.brain
    self:add_sensor({fixture={type='rect',
-                             w=8, h=8,
+                             w=self.dimx, h=self.dimy,
                              sensor=true}})
    self.timer = Timer(go)
    self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
@@ -380,11 +384,15 @@ function Bullet:init(pos, opts)
 end
 
 function Bullet:update()
-   self.brain:update(self)
-
    local go = self:go()
-   local vel = vector.new(go:vel()):norm() * (-300)
-   self.psys:activate(self, go:pos(), 100, 8, 8, vel)
+   local vel = vector.new(go:vel())
+
+   local angle = vel:angle()
+   self.sprite:angle(angle)
+
+   self.brain:update(self)
+   self.psys:activate(self, go:pos(), 100, self.dimx, self.dimy,
+                      vel:norm() * (-100))
 
    terminate_if_offscreen(self)
 end
@@ -392,7 +400,10 @@ end
 function Bullet:colliding_with(other)
    -- we're a sensor so we need to hand off this message
    local go = self:go()
-   self.psys:activate(self, go:pos(), 0)
+   if go then
+      self.psys:activate(self, go:pos(), 0)
+   end
+
    if not other:is_a(Bullet) then
       other:colliding_with(self)
    end
@@ -448,14 +459,18 @@ Pawn = oo.class(Enemy)
 function Pawn:init(pos)
    Enemy.init(self, pos)
 
-   self:go():add_component('CTestDisplay', {w=16,h=16})
+   local _art = world:atlas_entry(ATLAS, 'pawn')
+   self.dimx = _art.w
+   self.dimy = _art.h
+
+   self.sprite = self:go():add_component('CStaticSprite', {entry=_art})
    self.brain = SimpletonBrain({0, -200}, 10)
-   self:add_collider({fixture={type='rect', w=16, h=16}})
+   self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
 
 function Pawn:colliding_with(other)
    if other:is_a(Bullet) then
-      exploder:activate(self:go():pos(), 16, 16, 100)
+      exploder:activate(self:go():pos(), self.dimx, self.dimy, 100)
       play_sfx('expl')
       self:terminate()
       other:terminate()
@@ -466,21 +481,33 @@ Boss = oo.class(Enemy)
 function Boss:init(pos)
    Enemy.init(self, pos)
 
+   local _art = world:atlas_entry(ATLAS, 'boss')
+   self.dimx = _art.w
+   self.dimy = _art.h
+
    self.hp = 5
-   self:go():add_component('CTestDisplay', {w=32,h=64})
+   self:go():add_component('CStaticSprite', {entry=_art})
    self.brain = SimpletonBrain({0, -200}, 10)
-   self:add_collider({fixture={type='rect', w=32, h=64}})
+   self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
+end
+
+function Boss:update()
+   local go = self:go()
+   local angle = vector.new(go:vel()):angle()
+   go:angle(angle)
+
+   Enemy.update(self)
 end
 
 function Boss:colliding_with(other)
    if other:go() and other:is_a(Bullet) then
-      exploder:activate(other:go():pos(), 8, 8, 20)
+      exploder:activate(other:go():pos(), other.dimx, other.dimy, 20)
       play_sfx('expl')
       other:terminate()
       self.hp = self.hp - 1
 
       if self.hp == 0 then
-         exploder:activate(self:go():pos(), 32, 64, 300)
+         exploder:activate(self:go():pos(), self.dimx, self.dimy, 300)
          self:terminate()
       end
    end
@@ -510,14 +537,17 @@ function Player:init(pos)
    DynO.init(self, pos)
 
    local go = self:go()
-   self.dim = 64
-   self.gfx = go:add_component('CTestDisplay',
-                                    {w=self.dim,
-                                     h=self.dim})
+   local _art = world:atlas_entry(ATLAS, 'player')
+
+   self.dimx = _art.w
+   self.dimy = _art.h
+
+   self.gfx = go:add_component('CStaticSprite', {entry=_art})
+
    self.speed = 300
    self.steering = world:create_object('Steering')
-   self.lr_thruster = Thruster(go, self.dim, 16)
-   self.ud_thruster = Thruster(go, 16, self.dim)
+   self.lr_thruster = Thruster(go, self.dimx, 16)
+   self.ud_thruster = Thruster(go, 16, self.dimy)
    self.gun = Gun()
 end
 
@@ -556,7 +586,7 @@ function Player:update()
    end
 
    if input.action1 then
-      self.gun:fire(self, {0, self.dim/2})
+      self.gun:fire(self, {0, self.dimy/2})
    end
 end
 
