@@ -2,6 +2,7 @@ local oo = require 'oo'
 local util = require 'util'
 local vector = require 'vector'
 local constant = require 'constant'
+local rect = require 'rect'
 
 local Timer = require 'Timer'
 local DynO = require 'DynO'
@@ -22,8 +23,11 @@ local Spawner
 local Explosion
 local PSManager
 local ExplosionManager
+local BThruster
+local BThrusterManager
 
 local exploder
+local bthruster
 local player
 local sfx = {}
 
@@ -158,6 +162,7 @@ function PSManager:activate(...)
    local psys = table.remove(self.systems, 1)
    psys:activate(...)
    table.insert(self.systems, psys)
+   return psys
 end
 
 Explosion = oo.class(oo.Object)
@@ -221,6 +226,73 @@ function ExplosionManager:init(n)
    end
 
    PSManager.init(self, n, ctor)
+end
+
+BThruster = oo.class(oo.Object)
+function BThruster:init()
+   local _smoke = world:atlas_entry(ATLAS, 'steam')
+   local params =
+      {def=
+          {n=10,
+           renderer={name='PSC_E2SystemRenderer',
+                     params={entry=_smoke}},
+           activator={name='PSConstantRateActivator',
+                      params={rate=0}},
+           components={
+              {name='PSConstantAccelerationUpdater',
+               params={acc={0,0}}},
+              {name='PSTimeAlphaUpdater',
+               params={time_constant=0.4,
+                       max_scale=1.0}},
+              {name='PSRandColorInitializer',
+               params={min_color={0.6, 0.6, 0.8, 0.8},
+                       max_color={0.6, 0.6, 1.0, 1.0}}},
+              {name='PSBoxInitializer',
+               params={initial={-16,-34,16,-30},
+                       refresh={-16,-34,16,-30},
+                       minv={0,1000},
+                       maxv={0,1000}}},
+              {name='PSTimeInitializer',
+               params={min_life=0.2,
+                       max_life=0.3}},
+              {name='PSTimeTerminator'}}}}
+
+   local system = stage:add_component('CParticleSystem', params)
+   local activator = system:def():find_component('PSConstantRateActivator')
+   local psbox = system:def():find_component('PSBoxInitializer')
+
+   self.activator = activator
+   self.psbox = psbox
+end
+
+function BThruster:activate(owner, center, rate, dimx, dimy, vel)
+   -- this is just a claiming call
+   if not center then
+      self.owner = owner
+      return
+   end
+
+   if self.owner ~= owner then
+      return -- we've been claimed by someone else
+   end
+
+   self.activator:rate(rate)
+
+   if rate > 0 then
+      local rect = rect.centered(center, dimx, dimy)
+      self.psbox:initial(rect)
+      self.psbox:refresh(rect)
+      self.psbox:minv(vel)
+      self.psbox:maxv(vel)
+   end
+end
+
+BThrusterManager = oo.class(PSManager)
+function BThrusterManager:init(n)
+   local ctor = function()
+      return BThruster()
+   end
+   return PSManager.init(self, n, ctor)
 end
 
 local function terminate_if_offscreen(self)
@@ -304,15 +376,23 @@ function Bullet:init(pos, opts)
                              sensor=true}})
    self.timer = Timer(go)
    self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
+   self.psys = bthruster:activate(self)
 end
 
 function Bullet:update()
    self.brain:update(self)
+
+   local go = self:go()
+   local vel = vector.new(go:vel()):norm() * (-300)
+   self.psys:activate(self, go:pos(), 100, 8, 8, vel)
+
    terminate_if_offscreen(self)
 end
 
 function Bullet:colliding_with(other)
    -- we're a sensor so we need to hand off this message
+   local go = self:go()
+   self.psys:activate(self, go:pos(), 0)
    if not other:is_a(Bullet) then
       other:colliding_with(self)
    end
@@ -420,10 +500,8 @@ function Spawner:reset()
 end
 
 function Spawner:spawn()
-   -- for now, just spawn at the top of the screen
    local e = util.rand_choice(self.mix)
    e({util.rand_between(0,screen_width), screen_height})
-
    self:reset()
 end
 
@@ -502,6 +580,7 @@ function level_init()
    stars:set_vel({0, -40}, {0, -20})
 
    exploder = ExplosionManager(5)
+   bthruster = BThrusterManager(10)
 
    local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
                   'resources/DST-AngryMod.ogg'}
