@@ -385,10 +385,13 @@ end
 
 function Bullet:update()
    local go = self:go()
-   local vel = vector.new(go:vel())
+   if not go then
+      return
+   end
 
+   local vel = vector.new(go:vel())
    local angle = vel:angle()
-   self.sprite:angle(angle)
+   self.sprite:angle(angle + math.pi/2)
 
    self.brain:update(self)
    self.psys:activate(self, go:pos(), 100, self.dimx, self.dimy,
