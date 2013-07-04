@@ -12,8 +12,11 @@ local Thruster
 local Player
 local Gun
 local Bullet
+local Brain
 local SimpletonBrain
+local HomingBrain
 local Pawn
+local Enemy
 local Spawner
 local Explosion
 local ExplosionManager
@@ -202,7 +205,7 @@ end
 
 local function terminate_if_offscreen(self)
    local fuzz = 128
-   local pos = self.go:pos()
+   local pos = self:go():pos()
 
    -- kill on screen exit
    if pos[1] > screen_width + fuzz or pos[1] < -fuzz or pos[2] > screen_height + fuzz or pos[2] < -fuzz then
@@ -210,37 +213,57 @@ local function terminate_if_offscreen(self)
    end
 end
 
-SimpletonBrain = oo.class(oo.Object)
+Brain = oo.class(oo.Object)
+Brain.steering = world:create_object('Steering')
+function Brain:init()
+end
 
+HomingBrain = oo.class(Brain)
+function HomingBrain:init(tgt)
+   self.tgt = tgt
+end
+
+function HomingBrain:update(obj)
+   local goal = nil
+
+end
+
+SimpletonBrain = oo.class(oo.Object)
 function SimpletonBrain:init(tgt_vel, max_force)
-   self.tgt_vel = tgt_vel
+   Brain.init(self)
+
+   self.tgt_vel = vector.new(tgt_vel)
    self.max_force = max_force or 10
 end
 
 function SimpletonBrain:update(obj)
-   local go = obj.go
-   local pos = go:pos()
-   local vel = vector.new(go:vel())
-
-   local dv = self.tgt_vel - vel
-   if dv:length() > self.max_force then
-      dv = dv:norm() * self.max_force
-   end
-   go:apply_force(dv)
+   local steering = Brain.steering
+   local go = obj:go()
+   local params = {
+      force_max = self.max_force,
+      speed_max = self.tgt_vel:length(),
+      old_angle = 0,
+      application_time = world:dt()
+   }
+   steering:begin(params)
+   steering:apply_desired_velocity(self.tgt_vel, go:vel())
+   steering:complete()
+   go:apply_force(steering:force())
 end
 
-Bullet = oo.class(DynO)
 
+
+Bullet = oo.class(DynO)
 function Bullet:init(pos, opts)
    DynO.init(self, pos)
 
-   self.go:add_component('CTestDisplay', {w=8,h=8})
+   local go = self:go()
+   go:add_component('CTestDisplay', {w=8,h=8})
    self.brain = opts.brain
    self:add_sensor({fixture={type='rect',
                              w=8, h=8,
-                             density=opts.density,
                              sensor=true}})
-   self.timer = Timer(self.go)
+   self.timer = Timer(go)
    self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
 end
 
@@ -251,36 +274,52 @@ end
 
 function Bullet:colliding_with(other)
    -- we're a sensor so we need to hand off this message
-   other:colliding_with(self)
+   if not other:is_a(Bullet) then
+      other:colliding_with(self)
+   end
 end
 
 Gun = oo.class(oo.Object)
 
 function Gun:init(bullet_kind)
    self.bullet_kind = bullet_kind or Bullet
-   self.bubble_force = 100
-   self.bullet_density = 1
+
    self.hz = 10
    self.timer = Timer(stage)
    self.make_bullet_brain = function()
-      return SimpletonBrain({0, 500}, self.bubble_force)
+      return SimpletonBrain({0, 500}, 1000)
    end
 end
 
-function Gun:fire(owner)
+function Gun:fire(owner, offset)
    local shoot = function()
-      self.bullet_kind(owner.go:pos(),
-                       {density=self.bullet_density,
-                        brain=self.make_bullet_brain()})
+      local go = owner:go()
+      if go then
+         offset = offset or {0,0}
+         local pos = vector.new(go:pos()) + offset
+         self.bullet_kind(pos, {brain=self.make_bullet_brain()})
+      end
    end
    self.timer:maybe_set(1.0 / self.hz, shoot)
 end
 
-Pawn = oo.class(DynO)
-function Pawn:init(pos)
+Enemy = oo.class(DynO)
+Enemy.active = {}
+function Enemy:init(pos)
    DynO.init(self, pos)
+   table.insert(Enemy.active, self)
+end
 
-   self.go:add_component('CTestDisplay', {w=16,h=16})
+function Enemy:terminate()
+   DynO.terminate(self)
+   util.table_remove(Enemy.active, self)
+end
+
+Pawn = oo.class(Enemy)
+function Pawn:init(pos)
+   Enemy.init(self, pos)
+
+   self:go():add_component('CTestDisplay', {w=16,h=16})
    self.brain = SimpletonBrain({0, -200}, 10)
    self:add_collider({fixture={type='rect', w=16, h=16}})
 end
@@ -292,7 +331,7 @@ end
 
 function Pawn:colliding_with(other)
    if other:is_a(Bullet) then
-      exploder:explode(self.go:pos())
+      exploder:explode(self:go():pos())
       self:terminate()
       other:terminate()
    end
@@ -322,14 +361,16 @@ end
 Player = oo.class(DynO)
 function Player:init(pos)
    DynO.init(self, pos)
+
+   local go = self:go()
    self.dim = 64
-   self.gfx = self.go:add_component('CTestDisplay',
+   self.gfx = go:add_component('CTestDisplay',
                                     {w=self.dim,
                                      h=self.dim})
    self.speed = 300
    self.steering = world:create_object('Steering')
-   self.lr_thruster = Thruster(self.go, self.dim, 16)
-   self.ud_thruster = Thruster(self.go, 16, self.dim)
+   self.lr_thruster = Thruster(go, self.dim, 16)
+   self.ud_thruster = Thruster(go, 16, self.dim)
    self.gun = Gun()
 end
 
@@ -338,7 +379,7 @@ function Player:update()
    local leftright = self.speed * input.leftright
    local updown = self.speed * input.updown
 
-   local go = self.go
+   local go = self:go()
    local steering = self.steering
 
    local params = {
@@ -352,6 +393,7 @@ function Player:update()
    local desired_vel = vector.new({leftright, updown})
    steering:apply_desired_velocity(desired_vel, go:vel())
    steering:complete()
+   go:apply_force(steering:force())
 
    local zero = vector.new({0,0})
    if math.abs(desired_vel[1]) > 0 then
@@ -366,10 +408,8 @@ function Player:update()
       self.ud_thruster:set_flame({0,0}, 0)
    end
 
-   go:apply_force(steering:force())
-
    if input.action1 then
-      self.gun:fire(self)
+      self.gun:fire(self, {0, self.dim/2})
    end
 end
 
