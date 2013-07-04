@@ -17,12 +17,27 @@ local SimpletonBrain
 local HomingBrain
 local Pawn
 local Enemy
+local Boss
 local Spawner
 local Explosion
+local PSManager
 local ExplosionManager
 
 local exploder
 local player
+local sfx = {}
+
+function load_sfx(kind, names)
+   sfx[kind] = {}
+   for ii, name in ipairs(names) do
+      table.insert(sfx[kind], world:get_sound(name, 1.0))
+   end
+end
+
+function play_sfx(kind)
+   local snd = util.rand_choice(sfx[kind])
+   world:play_sound(snd, 1)
+end
 
 Stars = oo.class(oo.Object)
 function Stars:init(go)
@@ -113,25 +128,36 @@ function Thruster:set_flame(dir, rate)
 
    if dir[1] > 0 then
       rect = {dx2 - s, -dy2, dx2 + s, dy2}
-      vel = {v, 0}
    elseif dir[1] < 0 then
       rect = {-dx2 - s, -dy2, -dx2 + s, dy2}
-      vel = {-v, 0}
    elseif dir[2] > 0 then
       rect = {-dx2, dy2 - s, dx2, dy2 + s}
-      vel = {0, v}
    elseif dir[2] < 0 then
       rect = {-dx2, -dy2 - s, dx2, -dy2 + s}
-      vel = {0, -v}
    end
 
-   if rect and vel then
+   if rect then
+      local vel = vector.new(dir):norm() * v
       self.psbox:initial(rect)
       self.psbox:refresh(rect)
       self.psbox:minv(vel)
       self.psbox:maxv(vel)
    end
    self.activator:rate(rate)
+end
+
+PSManager = oo.class(oo.Object)
+function PSManager:init(n, ctor)
+   self.systems = {}
+   for i = 1,n do
+      table.insert(self.systems, ctor())
+   end
+end
+
+function PSManager:activate(...)
+   local psys = table.remove(self.systems, 1)
+   psys:activate(...)
+   table.insert(self.systems, psys)
 end
 
 Explosion = oo.class(oo.Object)
@@ -188,21 +214,13 @@ function Explosion:activate(center, w, h, speed)
    self.timer:reset(self.lifetime, term)
 end
 
-ExplosionManager = oo.class(oo.Object)
-function ExplosionManager:init(n, dim, speed)
-   self.systems = {}
-   self.dim = dim
-   self.speed = speed
-
-   for i = 1,n do
-      table.insert(self.systems, Explosion(0.2))
+ExplosionManager = oo.class(PSManager)
+function ExplosionManager:init(n)
+   local ctor = function()
+      return Explosion(0.2)
    end
-end
 
-function ExplosionManager:explode(pos)
-   local expl = table.remove(self.systems, 1)
-   expl:activate(pos, self.dim, self.dim, self.speed)
-   table.insert(self.systems, expl)
+   PSManager.init(self, n, ctor)
 end
 
 local function terminate_if_offscreen(self)
@@ -341,6 +359,11 @@ function Enemy:terminate()
    util.table_remove(Enemy.active, self)
 end
 
+function Enemy:update()
+   self.brain:update(self)
+   terminate_if_offscreen(self)
+end
+
 Pawn = oo.class(Enemy)
 function Pawn:init(pos)
    Enemy.init(self, pos)
@@ -350,16 +373,36 @@ function Pawn:init(pos)
    self:add_collider({fixture={type='rect', w=16, h=16}})
 end
 
-function Pawn:update()
-   self.brain:update(self)
-   terminate_if_offscreen(self)
-end
-
 function Pawn:colliding_with(other)
    if other:is_a(Bullet) then
-      exploder:explode(self:go():pos())
+      exploder:activate(self:go():pos(), 16, 16, 100)
+      play_sfx('expl')
       self:terminate()
       other:terminate()
+   end
+end
+
+Boss = oo.class(Enemy)
+function Boss:init(pos)
+   Enemy.init(self, pos)
+
+   self.hp = 5
+   self:go():add_component('CTestDisplay', {w=32,h=64})
+   self.brain = SimpletonBrain({0, -200}, 10)
+   self:add_collider({fixture={type='rect', w=32, h=64}})
+end
+
+function Boss:colliding_with(other)
+   if other:is_a(Bullet) then
+      exploder:activate(other:go():pos(), 8, 8, 20)
+      play_sfx('expl')
+      other:terminate()
+      self.hp = self.hp - 1
+
+      if self.hp == 0 then
+         exploder:activate(self:go():pos(), 32, 64, 300)
+         self:terminate()
+      end
    end
 end
 
@@ -453,10 +496,17 @@ function level_init()
    cam:pre_render(util.fthread(background))
 
    player = Player({screen_width/2, screen_height/2})
-   local spawner = Spawner(1, {Pawn})
+   local spawner = Spawner(1, {Pawn, Pawn, Boss})
 
    local stars = Stars(stage)
    stars:set_vel({0, -20}, {0, -10})
 
-   exploder = ExplosionManager(5, 16, 100)
+   exploder = ExplosionManager(5)
+
+   local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
+                  'resources/DST-AngryMod.ogg'}
+   util.loop_music(songs)
+
+   local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
+   load_sfx('expl', expl)
 end
