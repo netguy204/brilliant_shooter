@@ -20,7 +20,9 @@ local Enemy
 local Spawner
 local Explosion
 local ExplosionManager
+
 local exploder
+local player
 
 Stars = oo.class(oo.Object)
 function Stars:init(go)
@@ -219,13 +221,34 @@ function Brain:init()
 end
 
 HomingBrain = oo.class(Brain)
-function HomingBrain:init(tgt)
+function HomingBrain:init(tgt, opts)
    self.tgt = tgt
+
+   opts = opts or {}
+   self.max_force = opts.max_force or 300
+   self.max_speed = opts.max_speed or 1000
 end
 
 function HomingBrain:update(obj)
-   local goal = nil
+   local goal = self.tgt:go()
+   local go = obj:go()
 
+   local steering = Brain.steering
+   local params = {
+      force_max = self.max_force,
+      speed_max = self.max_speed,
+      old_angle = 0,
+      application_time = world:dt()
+   }
+
+   steering:begin(params)
+   if goal then
+      steering:pursuit(goal:pos(), goal:vel(), go:pos(), go:vel())
+   else
+      steering:flee(player:go():pos(), go:pos(), go:vel())
+   end
+   steering:complete()
+   go:apply_force(steering:force())
 end
 
 SimpletonBrain = oo.class(oo.Object)
@@ -250,8 +273,6 @@ function SimpletonBrain:update(obj)
    steering:complete()
    go:apply_force(steering:force())
 end
-
-
 
 Bullet = oo.class(DynO)
 function Bullet:init(pos, opts)
@@ -287,7 +308,12 @@ function Gun:init(bullet_kind)
    self.hz = 10
    self.timer = Timer(stage)
    self.make_bullet_brain = function()
-      return SimpletonBrain({0, 500}, 1000)
+      local enemy = util.rand_choice(Enemy.active)
+      if not enemy then
+         return SimpletonBrain({0, 500}, 1000)
+      else
+         return HomingBrain(enemy)
+      end
    end
 end
 
@@ -426,7 +452,7 @@ function level_init()
    local cam = stage:find_component('Camera', nil)
    cam:pre_render(util.fthread(background))
 
-   local player = Player({screen_width/2, screen_height/2})
+   player = Player({screen_width/2, screen_height/2})
    local spawner = Spawner(1, {Pawn})
 
    local stars = Stars(stage)
