@@ -63,8 +63,8 @@ function Stars:init(go)
                params={min_color={0.8, 0.8, 0.8, 0.2},
                        max_color={1.0, 1.0, 1.0, 1.0}}},
               {name='PSRandScaleInitializer',
-               params={min_scale=0.2,
-                       max_scale=0.6}},
+               params={min_scale=0.1,
+                       max_scale=0.3}},
               {name='PSBoxTerminator',
                params={rect={-_art.w*2, -_art.h*2,
                              screen_width + _art.w * 2,
@@ -393,7 +393,7 @@ function Boss:init(pos)
 end
 
 function Boss:colliding_with(other)
-   if other:is_a(Bullet) then
+   if other:go() and other:is_a(Bullet) then
       exploder:activate(other:go():pos(), 8, 8, 20)
       play_sfx('expl')
       other:terminate()
@@ -499,13 +499,13 @@ function level_init()
    local spawner = Spawner(1, {Pawn, Pawn, Boss})
 
    local stars = Stars(stage)
-   stars:set_vel({0, -20}, {0, -10})
+   stars:set_vel({0, -40}, {0, -20})
 
    exploder = ExplosionManager(5)
 
    local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
                   'resources/DST-AngryMod.ogg'}
-   util.loop_music(songs)
+   util.loop_music(util.rand_shuffle(songs))
 
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
