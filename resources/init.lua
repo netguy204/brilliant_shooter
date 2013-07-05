@@ -27,11 +27,36 @@ local PSManager
 local ExplosionManager
 local BThruster
 local BThrusterManager
+local DeathWall
 
 local exploder
 local bthruster
 local player
+local stars
+local spawner
+local death_wall
+
+local distance = 0
+local wall_accel = 10
+local wall_distance = -40
+local wall_rate = 7
+local player_rate = 5
+local enemy_spawn_rate = 1
+
 local sfx = {}
+
+function increase_wall_rate(points)
+   local factor = 5
+   wall_rate = wall_rate + factor * points
+   spawner.rate = spawner.rate + (points * factor) / 100
+end
+
+function change_player_rate(rate)
+   local increase = rate / 10
+   player_rate = player_rate + increase
+   Enemy.max_speed = Enemy.max_speed + increase
+   stars:set_vel({-player_rate, 0}, {-0.5 * player_rate, 0})
+end
 
 function load_sfx(kind, names)
    sfx[kind] = {}
@@ -122,13 +147,13 @@ function Thruster:init(go, dimx, dimy)
    self.dimy = dimy
    self.activator = activator
    self.psbox = psbox
+   self.speed = 100
 end
 
 function Thruster:set_flame(dir, rate)
    local rect = nil
    local vel = nil
    local s = 4
-   local v = 100
    local dx2 = self.dimx / 2
    local dy2 = self.dimy / 2
 
@@ -143,7 +168,7 @@ function Thruster:set_flame(dir, rate)
    end
 
    if rect then
-      local vel = vector.new(dir):norm() * v
+      local vel = vector.new(dir):norm() * self.speed
       self.psbox:initial(rect)
       self.psbox:refresh(rect)
       self.psbox:minv(vel)
@@ -154,6 +179,7 @@ end
 
 PSManager = oo.class(oo.Object)
 function PSManager:init(n, ctor)
+   self.n = n
    self.systems = {}
    for i = 1,n do
       table.insert(self.systems, ctor())
@@ -297,6 +323,69 @@ function BThrusterManager:init(n)
    return PSManager.init(self, n, ctor)
 end
 
+DeathWall = oo.class(oo.Object)
+function DeathWall:init()
+   self.test_rect = stage:add_component('CTestDisplay', {w=0, h=0,
+                                                         layer=constant.BACKGROUND})
+   self.sensor = nil
+   self.message = constant.NEXT_EPHEMERAL_MESSAGE()
+
+   local thread = util.fthread(self:bind('on_message'))
+   stage:add_component('CScripted', {message_thread=thread})
+end
+
+function DeathWall:enable(distance)
+   local r = {0, 0, distance, screen_height}
+   local w = rect.width(r)
+   local h = rect.height(r)
+   local c = rect.center(r)
+
+   self.test_rect:w(w)
+   self.test_rect:h(h)
+   self.test_rect:offset(c)
+
+   if self.sensor then
+      self.sensor:delete_me(1)
+   end
+
+   self.sensor = stage:add_component('CSensor', {kind=self.message,
+                                                 fixture={type='rect',
+                                                          sensor=true,
+                                                          center=c,
+                                                          w=w,
+                                                          h=h}})
+end
+
+function DeathWall:on_message()
+   local collisions = stage:has_message(self.message)
+
+   if collisions then
+      for ii, msg in ipairs(collisions) do
+         local obj = DynO.find(msg.source)
+
+         if obj then
+            if obj:is_a(Enemy) then
+               obj:explode()
+               increase_wall_rate(obj.hp)
+            elseif obj:is_a(Bullet) then
+               obj:explode()
+            elseif obj:is_a(Player) then
+               obj:explode()
+            end
+         end
+      end
+   end
+end
+
+function DeathWall:disable()
+   self.test_rect:w(0)
+   self.test_rect:h(0)
+   if self.sensor then
+      self.sensor:delete_me(1)
+      self.sensor = nil
+   end
+end
+
 local function terminate_if_offscreen(self)
    local fuzz = 128
    local pos = self:go():pos()
@@ -304,7 +393,9 @@ local function terminate_if_offscreen(self)
    -- kill on screen exit
    if pos[1] > screen_width + fuzz or pos[1] < -fuzz or pos[2] > screen_height + fuzz or pos[2] < -fuzz then
       self:terminate()
+      return true
    end
+   return false
 end
 
 Brain = oo.class(oo.Object)
@@ -390,14 +481,15 @@ function Bullet:init(pos, opts)
    self.dimy = _art.h
 
    local go = self:go()
-   self.sprite = go:add_component('CStaticSprite', {entry=_art})
+   self.sprite = go:add_component('CStaticSprite', {entry=_art,
+                                                    angle_offset=math.pi/2})
    self.brain = opts.brain
 
    self:add_sensor({fixture={type='rect',
                              w=self.dimx, h=self.dimy,
                              sensor=true}})
    self.timer = Timer(go)
-   self.timer:reset(opts.lifetime or 40, self:bind('terminate'))
+   self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
    self.psys = bthruster:activate(self)
 end
 
@@ -409,7 +501,7 @@ function Bullet:update()
 
    local vel = vector.new(go:vel())
    local angle = vel:angle()
-   self.sprite:angle(angle + math.pi/2)
+   go:angle(angle)
 
    self.brain:update(self)
    local pos = vector.new(go:pos())
@@ -425,6 +517,12 @@ function Bullet:terminate()
       self.psys:activate(self, go:pos(), 0)
    end
    DynO.terminate(self)
+end
+
+function Bullet:explode()
+   exploder:activate(self:go():pos(), self.dimx, self.dimy, 20)
+   play_sfx('expl')
+   self:terminate()
 end
 
 function Bullet:colliding_with(other)
@@ -460,6 +558,7 @@ end
 
 Enemy = oo.class(DynO)
 Enemy.active = {}
+Enemy.max_speed = 100
 function Enemy:init(pos, art)
    DynO.init(self, pos)
    table.insert(Enemy.active, self)
@@ -469,8 +568,9 @@ function Enemy:init(pos, art)
    self.dimy = _art.h
 
    local go = self:go()
+   go:vel({-Enemy.max_speed, 0})
    go:angle(math.pi/2)
-   self.sprite = go:add_component('CStaticSprite', {entry=_art, angle=math.pi/2})
+   self.sprite = go:add_component('CStaticSprite', {entry=_art})
    self.brain = SimpletonBrain({-200, 0}, 10)
    self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
@@ -481,20 +581,27 @@ function Enemy:terminate()
 end
 
 function Enemy:update()
+   local go = self:go()
+   self.brain.max_speed = Enemy.max_speed
    self.brain:update(self)
    terminate_if_offscreen(self)
+end
+
+function Enemy:explode()
+   exploder:activate(self:go():pos(), self.dimx, self.dimy, 100)
+   play_sfx('expl')
+   self:terminate()
 end
 
 Pawn = oo.class(Enemy)
 function Pawn:init(pos)
    Enemy.init(self, pos, 'pawn')
+   self.hp = 1
 end
 
 function Pawn:colliding_with(other)
    if other:is_a(Bullet) then
-      exploder:activate(self:go():pos(), self.dimx, self.dimy, 100)
-      play_sfx('expl')
-      self:terminate()
+      self:explode()
       other:terminate()
    end
 end
@@ -507,14 +614,13 @@ end
 
 function Boss:colliding_with(other)
    if other:go() and other:is_a(Bullet) then
-      exploder:activate(other:go():pos(), other.dimx, other.dimy, 20)
-      play_sfx('expl')
-      other:terminate()
       self.hp = self.hp - 1
 
       if self.hp == 0 then
-         exploder:activate(self:go():pos(), self.dimx, self.dimy, 300)
-         self:terminate()
+         self:explode()
+         other:terminate()
+      else
+         other:explode()
       end
    end
 end
@@ -548,13 +654,17 @@ function Player:init(pos)
    self.dimx = _art.w
    self.dimy = _art.h
 
-   self.gfx = go:add_component('CStaticSprite', {entry=_art, angle=math.pi/2})
-
-   self.speed = 300
+   self.gfx = go:add_component('CStaticSprite', {entry=_art})
+   go:angle(math.pi/2)
+   self.speed = 700
    self.steering = world:create_object('Steering')
    self.lr_thruster = Thruster(go, self.dimy, 16)
    self.ud_thruster = Thruster(go, 16, self.dimx)
    self.gun = Gun()
+   go:add_component('CSensor', {fixture={type='rect',
+                                         sensor=true,
+                                         w=self.dimx,
+                                         h=self.dimy}})
 end
 
 function Player:update()
@@ -564,23 +674,25 @@ function Player:update()
 
    local go = self:go()
    local steering = self.steering
+   local dt = world:dt()
 
    local params = {
       force_max = 10000,
       speed_max = self.speed,
       old_angle = 0,
-      application_time = world:dt()
+      application_time = dt
    }
 
    steering:begin(params)
-   local desired_vel = vector.new({leftright, updown})
+   local desired_vel = vector.new({0, updown})
    steering:apply_desired_velocity(desired_vel, go:vel())
    steering:complete()
    go:apply_force(steering:force())
 
    local zero = vector.new({0,0})
-   if math.abs(desired_vel[1]) > 0 then
-      self.lr_thruster:set_flame({-desired_vel[1],0}, 10000)
+   if math.abs(leftright) > 0 then
+      change_player_rate(leftright * dt)
+      self.lr_thruster:set_flame({-leftright,0}, 10000)
    else
       self.lr_thruster:set_flame({0,0}, 0)
    end
@@ -594,6 +706,24 @@ function Player:update()
    if input.action1 or LOAD_TEST then
       self.gun:fire(self, {self.dimy/2, 0})
    end
+
+   -- the wall is always speeding up
+   wall_rate = wall_rate + wall_accel * dt
+
+   wall_distance = wall_distance + (wall_rate - player_rate) * dt
+   if wall_distance > 0 then
+      death_wall:enable(wall_distance)
+   else
+      death_wall:disable()
+   end
+end
+
+function Player:explode()
+   for ii = 1,exploder.n do
+      exploder:activate(self:go():pos(), self.dimx, self.dimy, 200)
+   end
+   play_sfx('expl')
+   self:terminate()
 end
 
 local czor = world:create_object('Compositor')
@@ -609,14 +739,14 @@ function level_init()
    local cam = stage:find_component('Camera', nil)
    cam:pre_render(util.fthread(background))
 
-   player = Player({screen_width/4, screen_height/2})
-   local spawner = Spawner(1, {Pawn, Pawn, Boss})
-
-   local stars = Stars(stage)
-   stars:set_vel({-40, 0}, {-20, 0})
+   player = Player({screen_width/3, screen_height/2})
+   spawner = Spawner(1, {Pawn, Pawn, Boss})
+   stars = Stars(stage)
+   stars:set_vel({-player_rate, 0}, {-0.5 * player_rate, 0})
 
    exploder = ExplosionManager(5)
    bthruster = BThrusterManager(40)
+   death_wall = DeathWall()
 
    if not LOAD_TEST then
       local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
