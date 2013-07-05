@@ -552,8 +552,8 @@ function Player:init(pos)
 
    self.speed = 300
    self.steering = world:create_object('Steering')
-   self.lr_thruster = Thruster(go, self.dimx, 16)
-   self.ud_thruster = Thruster(go, 16, self.dimy)
+   self.lr_thruster = Thruster(go, self.dimy, 16)
+   self.ud_thruster = Thruster(go, 16, self.dimx)
    self.gun = Gun()
 end
 
@@ -592,7 +592,7 @@ function Player:update()
    end
 
    if input.action1 or LOAD_TEST then
-      self.gun:fire(self, {self.dimx/2, 0})
+      self.gun:fire(self, {self.dimy/2, 0})
    end
 end
 
