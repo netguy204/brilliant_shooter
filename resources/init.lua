@@ -126,7 +126,7 @@ function Thruster:set_flame(dir, rate)
    local rect = nil
    local vel = nil
    local s = 4
-   local v = 1000
+   local v = 200
    local dx2 = self.dimx / 2
    local dy2 = self.dimy / 2
 
@@ -310,55 +310,62 @@ Brain.steering = world:create_object('Steering')
 function Brain:init()
 end
 
-HomingBrain = oo.class(Brain)
-function HomingBrain:init(tgt, opts)
-   self.tgt = tgt
+function Brain:steering_params(obj)
+   local frame_skip = obj.script and obj.script:frame_skip()
+   local params = {
+      force_max = self.max_force or 0,
+      speed_max = self.max_speed or 0,
+      old_angle = 0,
+      application_time = world:dt() * frame_skip
+   }
+   return params
+end
 
+HomingBrain = oo.class(Brain)
+function HomingBrain:init(opts)
    opts = opts or {}
    self.max_force = opts.max_force or 300
    self.max_speed = opts.max_speed or 1000
 end
 
 function HomingBrain:update(obj)
-   local goal = self.tgt:go()
+   local goal = self.tgt and self.tgt:go()
+
+   -- bit of a hack, select a new enemy
+   if not goal then
+      self.tgt = util.rand_choice(Enemy.active) or self.tgt
+      goal = self.tgt and self.tgt:go()
+   end
+
    local go = obj:go()
 
    local steering = Brain.steering
-   local params = {
-      force_max = self.max_force,
-      speed_max = self.max_speed,
-      old_angle = 0,
-      application_time = world:dt()
-   }
+   steering:begin(self:steering_params(obj))
 
-   steering:begin(params)
    if goal then
       steering:pursuit(goal:pos(), goal:vel(), go:pos(), go:vel())
    else
-      steering:flee(player:go():pos(), go:pos(), go:vel())
+      local center = {screen_width/2, screen_height/2}
+      steering:arrival(center, go:pos(), go:vel(), 100)
    end
    steering:complete()
    go:apply_force(steering:force())
 end
 
-SimpletonBrain = oo.class(oo.Object)
+SimpletonBrain = oo.class(Brain)
 function SimpletonBrain:init(tgt_vel, max_force)
    Brain.init(self)
 
    self.tgt_vel = vector.new(tgt_vel)
    self.max_force = max_force or 10
+   self.max_speed = self.tgt_vel:length()
 end
 
 function SimpletonBrain:update(obj)
    local steering = Brain.steering
    local go = obj:go()
-   local params = {
-      force_max = self.max_force,
-      speed_max = self.tgt_vel:length(),
-      old_angle = 0,
-      application_time = world:dt()
-   }
-   steering:begin(params)
+
+   steering:begin(self:steering_params(obj))
    steering:apply_desired_velocity(self.tgt_vel, go:vel())
    steering:complete()
    go:apply_force(steering:force())
@@ -367,6 +374,9 @@ end
 Bullet = oo.class(DynO)
 function Bullet:init(pos, opts)
    DynO.init(self, pos)
+
+   -- no need to update ai on every frame
+   --self.script:frame_skip(5)
 
    local _art = world:atlas_entry(ATLAS, 'bullet')
    self.dimx = _art.w
@@ -379,7 +389,7 @@ function Bullet:init(pos, opts)
                              w=self.dimx, h=self.dimy,
                              sensor=true}})
    self.timer = Timer(go)
-   self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
+   self.timer:reset(opts.lifetime or 40, self:bind('terminate'))
    self.psys = bthruster:activate(self)
 end
 
@@ -397,16 +407,18 @@ function Bullet:update()
    self.psys:activate(self, go:pos(), 100, self.dimx, self.dimy,
                       vel:norm() * (-100))
 
-   terminate_if_offscreen(self)
 end
 
-function Bullet:colliding_with(other)
-   -- we're a sensor so we need to hand off this message
+function Bullet:terminate()
    local go = self:go()
    if go then
       self.psys:activate(self, go:pos(), 0)
    end
+   DynO.terminate(self)
+end
 
+function Bullet:colliding_with(other)
+   -- we're a sensor so we need to hand off this message
    if not other:is_a(Bullet) then
       other:colliding_with(self)
    end
@@ -420,12 +432,7 @@ function Gun:init(bullet_kind)
    self.hz = 10
    self.timer = Timer(stage)
    self.make_bullet_brain = function()
-      local enemy = util.rand_choice(Enemy.active)
-      if not enemy then
-         return SimpletonBrain({0, 500}, 1000)
-      else
-         return HomingBrain(enemy)
-      end
+      return HomingBrain()
    end
 end
 
@@ -613,7 +620,7 @@ function level_init()
    stars:set_vel({0, -40}, {0, -20})
 
    exploder = ExplosionManager(5)
-   bthruster = BThrusterManager(10)
+   bthruster = BThrusterManager(40)
 
    local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
                   'resources/DST-AngryMod.ogg'}
