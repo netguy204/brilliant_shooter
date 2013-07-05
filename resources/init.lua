@@ -383,7 +383,7 @@ function Bullet:init(pos, opts)
    DynO.init(self, pos)
 
    -- no need to update ai on every frame
-   self.script:frame_skip(5)
+   self.script:frame_skip(1)
 
    local _art = world:atlas_entry(ATLAS, 'bullet')
    self.dimx = _art.w
@@ -460,9 +460,19 @@ end
 
 Enemy = oo.class(DynO)
 Enemy.active = {}
-function Enemy:init(pos)
+function Enemy:init(pos, art)
    DynO.init(self, pos)
    table.insert(Enemy.active, self)
+
+   local _art = world:atlas_entry(ATLAS, art)
+   self.dimx = _art.w
+   self.dimy = _art.h
+
+   local go = self:go()
+   go:angle(math.pi/2)
+   self.sprite = go:add_component('CStaticSprite', {entry=_art, angle=math.pi/2})
+   self.brain = SimpletonBrain({-200, 0}, 10)
+   self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
 
 function Enemy:terminate()
@@ -477,15 +487,7 @@ end
 
 Pawn = oo.class(Enemy)
 function Pawn:init(pos)
-   Enemy.init(self, pos)
-
-   local _art = world:atlas_entry(ATLAS, 'pawn')
-   self.dimx = _art.w
-   self.dimy = _art.h
-
-   self.sprite = self:go():add_component('CStaticSprite', {entry=_art})
-   self.brain = SimpletonBrain({0, -200}, 10)
-   self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
+   Enemy.init(self, pos, 'pawn')
 end
 
 function Pawn:colliding_with(other)
@@ -499,24 +501,8 @@ end
 
 Boss = oo.class(Enemy)
 function Boss:init(pos)
-   Enemy.init(self, pos)
-
-   local _art = world:atlas_entry(ATLAS, 'boss')
-   self.dimx = _art.w
-   self.dimy = _art.h
-
+   Enemy.init(self, pos, 'boss')
    self.hp = 5
-   self:go():add_component('CStaticSprite', {entry=_art})
-   self.brain = SimpletonBrain({0, -200}, 10)
-   self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
-end
-
-function Boss:update()
-   local go = self:go()
-   local angle = vector.new(go:vel()):angle()
-   go:angle(angle)
-
-   Enemy.update(self)
 end
 
 function Boss:colliding_with(other)
@@ -548,7 +534,7 @@ end
 
 function Spawner:spawn()
    local e = util.rand_choice(self.mix)
-   e({util.rand_between(0,screen_width), screen_height})
+   e({screen_width, util.rand_between(0,screen_height)})
    self:reset()
 end
 
@@ -562,7 +548,7 @@ function Player:init(pos)
    self.dimx = _art.w
    self.dimy = _art.h
 
-   self.gfx = go:add_component('CStaticSprite', {entry=_art})
+   self.gfx = go:add_component('CStaticSprite', {entry=_art, angle=math.pi/2})
 
    self.speed = 300
    self.steering = world:create_object('Steering')
@@ -606,7 +592,7 @@ function Player:update()
    end
 
    if input.action1 or LOAD_TEST then
-      self.gun:fire(self, {0, self.dimy/2})
+      self.gun:fire(self, {self.dimx/2, 0})
    end
 end
 
@@ -623,11 +609,11 @@ function level_init()
    local cam = stage:find_component('Camera', nil)
    cam:pre_render(util.fthread(background))
 
-   player = Player({screen_width/2, screen_height/2})
+   player = Player({screen_width/4, screen_height/2})
    local spawner = Spawner(1, {Pawn, Pawn, Boss})
 
    local stars = Stars(stage)
-   stars:set_vel({0, -40}, {0, -20})
+   stars:set_vel({-40, 0}, {-20, 0})
 
    exploder = ExplosionManager(5)
    bthruster = BThrusterManager(40)
