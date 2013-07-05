@@ -8,6 +8,8 @@ local Timer = require 'Timer'
 local DynO = require 'DynO'
 local ATLAS = 'resources/default'
 
+local LOAD_TEST = false
+
 local Stars
 local Thruster
 local Player
@@ -87,7 +89,7 @@ function Thruster:init(go, dimx, dimy)
    local _smoke = world:atlas_entry(ATLAS, 'steam')
    local params =
       {def=
-          {n=100,
+          {n=20,
            renderer={name='PSC_E2SystemRenderer',
                      params={entry=_smoke}},
            activator={name='PSConstantRateActivator',
@@ -126,7 +128,7 @@ function Thruster:set_flame(dir, rate)
    local rect = nil
    local vel = nil
    local s = 4
-   local v = 200
+   local v = 100
    local dx2 = self.dimx / 2
    local dy2 = self.dimy / 2
 
@@ -243,7 +245,7 @@ function BThruster:init()
                params={acc={0,0}}},
               {name='PSTimeAlphaUpdater',
                params={time_constant=0.4,
-                       max_scale=1.0}},
+                       max_scale=0.7}},
               {name='PSRandColorInitializer',
                params={min_color={0.4, 0.4, 0.8, 0.8},
                        max_color={0.4, 0.4, 1.0, 1.0}}},
@@ -311,24 +313,31 @@ function Brain:init()
 end
 
 function Brain:steering_params(obj)
-   local frame_skip = obj.script and obj.script:frame_skip()
+   local frame_skip = (obj.script and obj.script:frame_skip()) or 1
    local params = {
-      force_max = self.max_force or 0,
+      force_max = (self.max_force or 0) * frame_skip,
       speed_max = self.max_speed or 0,
       old_angle = 0,
-      application_time = world:dt() * frame_skip
+      application_time = world:dt()
    }
    return params
 end
 
 HomingBrain = oo.class(Brain)
 function HomingBrain:init(opts)
+   Brain.init(self)
+
    opts = opts or {}
    self.max_force = opts.max_force or 300
    self.max_speed = opts.max_speed or 1000
 end
 
 function HomingBrain:update(obj)
+   local go = obj:go()
+   if not go then
+      return
+   end
+
    local goal = self.tgt and self.tgt:go()
 
    -- bit of a hack, select a new enemy
@@ -336,8 +345,6 @@ function HomingBrain:update(obj)
       self.tgt = util.rand_choice(Enemy.active) or self.tgt
       goal = self.tgt and self.tgt:go()
    end
-
-   local go = obj:go()
 
    local steering = Brain.steering
    steering:begin(self:steering_params(obj))
@@ -376,7 +383,7 @@ function Bullet:init(pos, opts)
    DynO.init(self, pos)
 
    -- no need to update ai on every frame
-   --self.script:frame_skip(5)
+   self.script:frame_skip(5)
 
    local _art = world:atlas_entry(ATLAS, 'bullet')
    self.dimx = _art.w
@@ -385,6 +392,7 @@ function Bullet:init(pos, opts)
    local go = self:go()
    self.sprite = go:add_component('CStaticSprite', {entry=_art})
    self.brain = opts.brain
+
    self:add_sensor({fixture={type='rect',
                              w=self.dimx, h=self.dimy,
                              sensor=true}})
@@ -404,7 +412,9 @@ function Bullet:update()
    self.sprite:angle(angle + math.pi/2)
 
    self.brain:update(self)
-   self.psys:activate(self, go:pos(), 100, self.dimx, self.dimy,
+   local pos = vector.new(go:pos())
+   local aft = pos - (vel:norm() * self.dimy)
+   self.psys:activate(self, aft, 100, 3, 3,
                       vel:norm() * (-100))
 
 end
@@ -595,7 +605,7 @@ function Player:update()
       self.ud_thruster:set_flame({0,0}, 0)
    end
 
-   if input.action1 then
+   if input.action1 or LOAD_TEST then
       self.gun:fire(self, {0, self.dimy/2})
    end
 end
@@ -622,9 +632,11 @@ function level_init()
    exploder = ExplosionManager(5)
    bthruster = BThrusterManager(40)
 
-   local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
-                  'resources/DST-AngryMod.ogg'}
-   util.loop_music(util.rand_shuffle(songs))
+   if not LOAD_TEST then
+      local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
+                     'resources/DST-AngryMod.ogg'}
+      util.loop_music(util.rand_shuffle(songs))
+   end
 
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
