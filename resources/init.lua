@@ -61,7 +61,7 @@ function Stars:init(go)
                params={initial={-_art.w, -_art.h,
                                 screen_width + _art.w,
                                 screen_height + _art.h},
-                       refresh={-_art.w, screen_height + _art.h,
+                       refresh={screen_width + _art.w, - _art.h,
                                 screen_width + _art.w, screen_height + _art.h},
                        minv={0, 0},
                        maxv={0, 0}}},
