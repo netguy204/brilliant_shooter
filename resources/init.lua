@@ -40,7 +40,7 @@ local distance = 0
 local wall_accel = 10
 local wall_distance = -40
 local wall_rate = 7
-local player_rate = 5
+local player_rate = 40
 local enemy_spawn_rate = 1
 
 local sfx = {}
@@ -325,8 +325,41 @@ end
 
 DeathWall = oo.class(oo.Object)
 function DeathWall:init()
-   self.test_rect = stage:add_component('CTestDisplay', {w=0, h=0,
-                                                         layer=constant.BACKGROUND})
+   local _smoke = world:atlas_entry(ATLAS, 'smoke')
+   local params =
+      {def=
+          {layer=constant.BACKGROUND,
+           n=800,
+           renderer={name='PSC_E2SystemRenderer',
+                     params={entry=_smoke}},
+           activator={name='PSConstantRateActivator',
+                      params={rate=0}},
+           components={
+              {name='PSConstantAccelerationUpdater',
+               params={acc={0,0}}},
+              {name='PSTimeAlphaUpdater',
+               params={time_constant=1.0,
+                       max_scale=3.0}},
+              {name='PSRandColorInitializer',
+               params={min_color={0.4, 0.8, 0.4, 0.8},
+                       max_color={0.4, 1.0, 0.4, 1.0}}},
+              {name='PSBoxInitializer',
+               params={initial={-16,-34,16,-30},
+                       refresh={-16,-34,16,-30},
+                       minv={200,-30},
+                       maxv={300,30}}},
+              {name='PSBoxTerminator',
+               params={rect={-16,34,16,-30}}},
+              {name='PSTimeInitializer',
+               params={min_life=0.6,
+                       max_life=1.2}},
+              {name='PSTimeTerminator'}}}}
+
+   local system = stage:add_component('CParticleSystem', params)
+   self.activator = system:def():find_component('PSConstantRateActivator')
+   self.psbox = system:def():find_component('PSBoxInitializer')
+   self.psterm = system:def():find_component('PSBoxTerminator')
+
    self.sensor = nil
    self.message = constant.NEXT_EPHEMERAL_MESSAGE()
 
@@ -335,14 +368,17 @@ function DeathWall:init()
 end
 
 function DeathWall:enable(distance)
-   local r = {0, 0, distance, screen_height}
+   local r = {-200, -100, distance-100, screen_height+100}
+   local r2 = {-200, -100, distance-10, screen_height+100}
+
    local w = rect.width(r)
    local h = rect.height(r)
    local c = rect.center(r)
 
-   self.test_rect:w(w)
-   self.test_rect:h(h)
-   self.test_rect:offset(c)
+   self.psbox:initial(r)
+   self.psbox:refresh(r)
+   self.psterm:rect(r2)
+   self.activator:rate(10000)
 
    if self.sensor then
       self.sensor:delete_me(1)
@@ -378,8 +414,8 @@ function DeathWall:on_message()
 end
 
 function DeathWall:disable()
-   self.test_rect:w(0)
-   self.test_rect:h(0)
+   self.activator:rate(0)
+
    if self.sensor then
       self.sensor:delete_me(1)
       self.sensor = nil
@@ -584,7 +620,9 @@ function Enemy:update()
    local go = self:go()
    self.brain.max_speed = Enemy.max_speed
    self.brain:update(self)
-   terminate_if_offscreen(self)
+   if terminate_if_offscreen(self) and go:pos()[1] < 0 then
+      increase_wall_rate(self.hp)
+   end
 end
 
 function Enemy:explode()
@@ -711,7 +749,7 @@ function Player:update()
    wall_rate = wall_rate + wall_accel * dt
 
    wall_distance = wall_distance + (wall_rate - player_rate) * dt
-   if wall_distance > 0 then
+   if wall_distance > -50 then
       death_wall:enable(wall_distance)
    else
       death_wall:disable()
