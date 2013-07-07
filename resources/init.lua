@@ -19,6 +19,7 @@ local Bullet
 local Brain
 local SimpletonBrain
 local HomingBrain
+local SeekBrain
 local Pawn
 local Enemy
 local Boss
@@ -488,6 +489,22 @@ function HomingBrain:update(obj)
    go:apply_force(steering:force())
 end
 
+SeekBrain = oo.class(Brain)
+function SeekBrain:init(tgt)
+   Brain.init(self)
+   self.tgt = vector.new(tgt)
+end
+
+function SeekBrain:update(obj)
+   local go = obj:go()
+   local steering = Brain.steering
+   steering:begin(self:steering_params(obj))
+   steering:seek(self.tgt, go:pos(), go:vel())
+   steering:complete()
+   local force = vector.new(steering:force())
+   go:apply_force(force)
+end
+
 SimpletonBrain = oo.class(Brain)
 function SimpletonBrain:init(tgt_vel, max_force)
    Brain.init(self)
@@ -608,7 +625,8 @@ function Enemy:init(pos, art)
    local go = self:go()
    go:vel({-Enemy.max_speed, 0})
    go:angle(math.pi/2)
-   self.sprite = go:add_component('CStaticSprite', {entry=_art})
+   self.sprite = go:add_component('CStaticSprite', {entry=_art,
+                                                    angle_offset=math.pi/2})
    self.brain = SimpletonBrain({-200, 0}, 10)
    self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
@@ -620,11 +638,15 @@ end
 
 function Enemy:update()
    local go = self:go()
-   self.brain.max_speed = Enemy.max_speed
-   self.brain:update(self)
-   if terminate_if_offscreen(self) and go:pos()[1] < 0 then
+   if self.brain then
+      self.brain.max_speed = Enemy.max_speed
+      self.brain:update(self)
+   end
+   if (not self.long_lived) and terminate_if_offscreen(self) and go:pos()[1] < 0 then
       increase_wall_rate(self.hp)
    end
+
+   go:angle(vector.new(go:vel()):angle())
 end
 
 function Enemy:explode()
@@ -849,6 +871,21 @@ All you need to do now is escape alive.]]
                                      message=press,
                                      offset={(screen_width - font:string_width(press))/2,
                                              font:line_height()}})
+   local _jupiter = world:atlas_entry(ATLAS, 'jupiter')
+   local planet = stage:add_component('CStaticSprite', {entry=_jupiter,
+                                                        offset={screen_width/2,
+                                                                screen_height/2},
+                                                        layer=constant.BACKGROUND})
+
+   local spawn_harvester = function(pos, kind)
+      local ship = kind(pos)
+      local center_brain = SeekBrain({screen_width/2, screen_height/2})
+      center_brain.max_speed = 100
+      center_brain.max_force = 100
+      ship:go():vel({0,0})
+      ship.long_lived = true
+      ship.brain = center_brain
+   end
 
    local text_chunk = function(str)
       local fn = function()
@@ -861,9 +898,23 @@ All you need to do now is escape alive.]]
    end
 
    local seq = {
-      text_chunk(story[1]),
-      text_chunk(story[2]),
-      text_chunk(story[3]),
+      function()
+         text_chunk(story[1])()
+         spawn_harvester({-100,screen_height/2}, Pawn)
+      end,
+      function()
+         text_chunk(story[2])()
+         spawn_harvester({-100,-100}, Boss)
+         spawn_harvester({-100,screen_height+100}, Boss)
+         spawn_harvester({-100,300}, Boss)
+         spawn_harvester({-600,300}, Boss)
+      end,
+      function()
+         text_chunk(story[3])()
+         for ii=1,25 do
+            Bullet({screen_width + 100+ii*100, ii*100}, {brain=HomingBrain()})
+         end
+      end,
       text_chunk(story[4]),
       function()
          stash:set('mode', 'game')
@@ -875,24 +926,22 @@ All you need to do now is escape alive.]]
 end
 
 function game_main()
-   world:gravity({0,0})
-
    player = Player({screen_width/3, screen_height/2})
    spawner = Spawner(1, {Pawn, Pawn, Pawn, Boss})
    stars:set_vel({-player_rate, 0}, {-0.5 * player_rate, 0})
 
-   exploder = ExplosionManager(5)
-   bthruster = BThrusterManager(40)
    death_wall = DeathWall()
-
 end
 
 function level_init()
+   world:gravity({0,0})
    math.randomseed(os.time())
    util.install_basic_keymap()
 
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
+   exploder = ExplosionManager(5)
+   bthruster = BThrusterManager(40)
 
    if not LOAD_TEST then
       start_music()
