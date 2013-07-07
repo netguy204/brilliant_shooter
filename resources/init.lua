@@ -7,6 +7,7 @@ local rect = require 'rect'
 local Timer = require 'Timer'
 local DynO = require 'DynO'
 local ATLAS = 'resources/default'
+local stash = require 'stash'
 
 local LOAD_TEST = false
 
@@ -35,7 +36,6 @@ local player
 local stars
 local spawner
 local death_wall
-local font
 local score_display = nil
 
 local distance = 0
@@ -772,38 +772,148 @@ function background()
    czor:clear_with_color(util.rgba(0,0,0,0))
 end
 
-function level_init()
-   math.randomseed(os.time())
+local font = nil
+function default_font()
+   if not font then
+      local characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.!?,\'"'
+      font = world:create_object('Font')
+      font:load(world:atlas(ATLAS), 'visitor', characters)
+      font:scale(3)
+      font:set_char_width('i', 3)
+      font:set_char_lead('i', -2)
+      font:set_char_width('.', 3)
+      font:set_char_lead('.', -2)
+      font:set_char_width(',', 3)
+      font:set_char_lead(',', -3)
+      font:word_separation(5)
+   end
+   return font
+end
 
-   util.install_basic_keymap()
+function start_music()
+   local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
+                  'resources/DST-AngryMod.ogg'}
+   util.loop_music(util.rand_shuffle(songs))
+end
+
+function screen_sequence(fns)
+   local trigger = util.rising_edge_trigger(false)
+   local count = util.count(fns)
+   local current = 1
+
+   fns[current]()
+   local thread = function(go, comp)
+      local input = util.input_state()
+      if trigger(input.action1) then
+         current = current + 1
+         if current == count then
+            comp:delete_me(1)
+         end
+         fns[current]()
+      end
+   end
+
+   if count > 1 then
+      local comp = stage:add_component('CScripted', {update_thread=util.fthread(thread)})
+   end
+end
+
+function story_main()
+   local story = {
+      [[In AD 2001, the Glorbaag began discreetly extracting Mertekron from
+the rich lower atmospheres of Jupiter. Earth was unaware.]],
+
+      [[The Mertekron market exploded in 2059 when the full cranial media
+emersion helmet was introduced. Every Glorbaag needed a visor and
+Mertekron was a critical component.
+
+Ambitious and less discrete raw material coorporations arrived at
+Jupiter and began extraction in ernest.]],
+
+      [[Earth became aware and dealt violently with the territorial breach.
+So began the 200 year war.]],
+
+      [[The year is 2260. You are all that is left of Earth System Guard.
+You have penetrated the Glorbaag solar system and ignited their sun.
+The resulting blow will be decisive.
+
+All you need to do now is escape alive.]]
+   }
+
+   local font = default_font()
+   local text = stage:add_component('CDrawText', {font=font})
+
+   local press = 'Press Z'
+   stage:add_component('CDrawText', {font=font,
+                                     color={0.6, 0.6, 1.0, 0.8},
+                                     message=press,
+                                     offset={(screen_width - font:string_width(press))/2,
+                                             font:line_height()}})
+
+   local text_chunk = function(str)
+      local fn = function()
+         local sw = font:string_width(util.split(str, "\n")[1])
+         local offset = (screen_width - sw) / 2
+         text:message(str)
+         text:offset({offset,screen_height-font:line_height()*2})
+      end
+      return fn
+   end
+
+   local seq = {
+      text_chunk(story[1]),
+      text_chunk(story[2]),
+      text_chunk(story[3]),
+      text_chunk(story[4]),
+      function()
+         stash:set('mode', 'game')
+         reset_world()
+      end
+   }
+
+   screen_sequence(seq)
+end
+
+function game_main()
    world:gravity({0,0})
 
-   local cam = stage:find_component('Camera', nil)
-   cam:pre_render(util.fthread(background))
-
    player = Player({screen_width/3, screen_height/2})
-   spawner = Spawner(1, {Pawn, Pawn, Boss})
-   stars = Stars(stage)
+   spawner = Spawner(1, {Pawn, Pawn, Pawn, Boss})
    stars:set_vel({-player_rate, 0}, {-0.5 * player_rate, 0})
 
    exploder = ExplosionManager(5)
    bthruster = BThrusterManager(40)
    death_wall = DeathWall()
 
-   if not LOAD_TEST then
-      local songs = {'resources/DST-1990.ogg', 'resources/DST-AlphaTron.ogg',
-                     'resources/DST-AngryMod.ogg'}
-      util.loop_music(util.rand_shuffle(songs))
-   end
+end
+
+function level_init()
+   math.randomseed(os.time())
+   util.install_basic_keymap()
 
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
 
-   local characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-   font = world:create_object('Font')
-   font:load(world:atlas(ATLAS), 'visitor', characters)
-   font:scale(4)
-   score_component = stage:add_component('CDrawText', {font=font,
-                                                       message='Hello World',
-                                                       offset={screen_width/2,screen_height-40}})
+   if not LOAD_TEST then
+      start_music()
+   end
+
+   local cam = stage:find_component('Camera', nil)
+   cam:pre_render(util.fthread(background))
+   stars = Stars(stage)
+   stars:set_vel({-40, 0}, {-20, 0})
+
+   local mains = {
+      story = story_main,
+      game = game_main
+   }
+
+   local main = mains[stash:get('mode', 'story')]
+   main()
+end
+
+function test_init()
+   real_init()
+   local timer = Timer()
+   timer:reset(1, reset_world)
 end
