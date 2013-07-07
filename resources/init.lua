@@ -846,11 +846,11 @@ function story_main()
 the rich lower atmospheres of Jupiter. Earth was unaware.]],
 
       [[The Mertekron market exploded in 2059 when the full cranial media
-emersion helmet was introduced. Every Glorbaag needed a visor and
+emersion headgear was introduced. Every Glorbaag needed a visor and
 Mertekron was a critical component.
 
-Ambitious and less discrete raw material coorporations arrived at
-Jupiter and began extraction in ernest.]],
+Ambitious and less discrete raw material corporations arrived at
+Jupiter and began extraction in earnest.]],
 
       [[Earth became aware and dealt violently with the territorial breach.
 So began the 200 year war.]],
