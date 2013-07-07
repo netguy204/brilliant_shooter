@@ -35,6 +35,8 @@ local player
 local stars
 local spawner
 local death_wall
+local font
+local score_display = nil
 
 local distance = 0
 local wall_accel = 10
@@ -771,6 +773,8 @@ function background()
 end
 
 function level_init()
+   math.randomseed(os.time())
+
    util.install_basic_keymap()
    world:gravity({0,0})
 
@@ -794,4 +798,12 @@ function level_init()
 
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
+
+   local characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+   font = world:create_object('Font')
+   font:load(world:atlas(ATLAS), 'visitor', characters)
+   font:scale(4)
+   score_component = stage:add_component('CDrawText', {font=font,
+                                                       message='Hello World',
+                                                       offset={screen_width/2,screen_height-40}})
 end
