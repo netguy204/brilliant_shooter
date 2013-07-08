@@ -9,7 +9,8 @@ local DynO = require 'DynO'
 local ATLAS = 'resources/default'
 local stash = require 'stash'
 
-local LOAD_TEST = false
+local LOAD = 'load'
+local game_state -- = LOAD -- load testing
 
 local Stars
 local Thruster
@@ -37,7 +38,8 @@ local player
 local stars
 local spawner
 local death_wall
-local score_display = nil
+local score_display
+local center_go
 
 local distance = 0
 local wall_accel = 10
@@ -439,97 +441,86 @@ end
 
 Brain = oo.class(oo.Object)
 Brain.steering = world:create_object('Steering')
-function Brain:init()
+function Brain:init(dyno)
+   self.dyno = dyno
 end
 
-function Brain:steering_params(obj)
-   local frame_skip = (obj.script and obj.script:frame_skip()) or 1
+function Brain:go()
+   return self.dyno:go()
+end
+
+function Brain:update()
+end
+
+function Brain:steering_params()
    local params = {
-      force_max = (self.max_force or 0) * frame_skip,
-      speed_max = self.max_speed or 0,
+      force_max = self.force_max or 0,
+      speed_max = self.speed_max or 0,
       old_angle = 0,
       application_time = world:dt()
    }
    return params
 end
 
-HomingBrain = oo.class(Brain)
-function HomingBrain:init(opts)
-   Brain.init(self)
-
-   opts = opts or {}
-   self.max_force = opts.max_force or 300
-   self.max_speed = opts.max_speed or 1000
+function Brain:params(updates)
+   for k, v in pairs(updates) do
+      self[k] = v
+   end
+   self.brain:params(self:steering_params())
 end
 
-function HomingBrain:update(obj)
-   local go = obj:go()
-   if not go then
-      return
-   end
+HomingBrain = oo.class(Brain)
+function HomingBrain:init(dyno)
+   Brain.init(self, dyno)
+   self.force_max = 300
+   self.speed_max = 1000
 
-   local goal = self.tgt and self.tgt:go()
+   local params = self:steering_params()
+   self.brain = world:create_object('PursuitBrain')
+   self:go():add_component('CBrain', {brain=self.brain})
+   self:target(nil)
+end
 
-   -- bit of a hack, select a new enemy
-   if not goal then
+function HomingBrain:target(obj)
+   self.brain:tgt((obj and obj:go()) or center_go)
+   self.brain:params(self:steering_params())
+end
+
+function HomingBrain:update()
+   if not (self.tgt and self.tgt:go()) then
       self.tgt = util.rand_choice(Enemy.active) or self.tgt
-      goal = self.tgt and self.tgt:go()
+      self:target(self.tgt)
    end
-
-   local steering = Brain.steering
-   steering:begin(self:steering_params(obj))
-
-   if goal then
-      steering:pursuit(goal:pos(), goal:vel(), go:pos(), go:vel())
-   else
-      local center = {screen_width/2, screen_height/2}
-      steering:arrival(center, go:pos(), go:vel(), 100)
-   end
-   steering:complete()
-   go:apply_force(steering:force())
 end
 
 SeekBrain = oo.class(Brain)
-function SeekBrain:init(tgt)
-   Brain.init(self)
-   self.tgt = vector.new(tgt)
-end
-
-function SeekBrain:update(obj)
-   local go = obj:go()
-   local steering = Brain.steering
-   steering:begin(self:steering_params(obj))
-   steering:seek(self.tgt, go:pos(), go:vel())
-   steering:complete()
-   local force = vector.new(steering:force())
-   go:apply_force(force)
+function SeekBrain:init(dyno, tgt)
+   Brain.init(self, dyno)
+   self.brain = world:create_object('SeekBrain')
+   self.brain:tgt(tgt)
+   self.brain:params(self:steering_params())
+   self:go():add_component('CBrain', {brain=self.brain})
 end
 
 SimpletonBrain = oo.class(Brain)
-function SimpletonBrain:init(tgt_vel, max_force)
-   Brain.init(self)
+function SimpletonBrain:init(dyno, tgt_vel, force_max)
+   Brain.init(self, dyno)
 
-   self.tgt_vel = vector.new(tgt_vel)
-   self.max_force = max_force or 10
-   self.max_speed = self.tgt_vel:length()
-end
-
-function SimpletonBrain:update(obj)
-   local steering = Brain.steering
-   local go = obj:go()
-
-   steering:begin(self:steering_params(obj))
-   steering:apply_desired_velocity(self.tgt_vel, go:vel())
-   steering:complete()
-   go:apply_force(steering:force())
+   tgt_vel = vector.new(tgt_vel)
+   self.force_max = force_max or 10
+   self.speed_max = tgt_vel:length()
+   self.brain = world:create_object('VelocityBrain')
+   self.brain:tgt_vel(tgt_vel)
+   self.brain:params(self:steering_params())
+   self:go():add_component('CBrain', {brain=self.brain})
 end
 
 Bullet = oo.class(DynO)
-function Bullet:init(pos, opts)
+function Bullet:init(pos)
    DynO.init(self, pos)
 
    -- no need to update ai on every frame
-   self.script:frame_skip(1)
+   self.script:frame_skip(5)
 
    local _art = world:atlas_entry(ATLAS, 'bullet')
    self.dimx = _art.w
@@ -538,21 +529,16 @@ function Bullet:init(pos, opts)
    local go = self:go()
    self.sprite = go:add_component('CStaticSprite', {entry=_art,
                                                     angle_offset=math.pi/2})
-   self.brain = opts.brain
-
    self:add_sensor({fixture={type='rect',
                              w=self.dimx, h=self.dimy,
                              sensor=true}})
    self.timer = Timer(go)
-   self.timer:reset(opts.lifetime or 20, self:bind('terminate'))
+   self.timer:reset(20, self:bind('terminate'))
    self.psys = bthruster:activate(self)
 end
 
 function Bullet:update()
    local go = self:go()
-   if not go then
-      return
-   end
 
    local vel = vector.new(go:vel())
    local angle = vel:angle()
@@ -594,8 +580,8 @@ function Gun:init(bullet_kind)
 
    self.hz = 10
    self.timer = Timer(stage)
-   self.make_bullet_brain = function()
-      return HomingBrain()
+   self.add_bullet_brain = function(bullet)
+      bullet.brain = HomingBrain(bullet)
    end
 end
 
@@ -605,7 +591,8 @@ function Gun:fire(owner, offset)
       if go then
          offset = offset or {0,0}
          local pos = vector.new(go:pos()) + offset
-         self.bullet_kind(pos, {brain=self.make_bullet_brain()})
+         local bullet = self.bullet_kind(pos)
+         self.add_bullet_brain(bullet)
       end
    end
    self.timer:maybe_set(1.0 / self.hz, shoot)
@@ -627,7 +614,8 @@ function Enemy:init(pos, art)
    go:angle(math.pi/2)
    self.sprite = go:add_component('CStaticSprite', {entry=_art,
                                                     angle_offset=math.pi/2})
-   self.brain = SimpletonBrain({-200, 0}, 10)
+
+   self.brain = SimpletonBrain(self, {-200, 0}, 10)
    self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
 
@@ -765,7 +753,7 @@ function Player:update()
       self.ud_thruster:set_flame({0,0}, 0)
    end
 
-   if input.action1 or LOAD_TEST then
+   if input.action1 or game_state == LOAD then
       self.gun:fire(self, {self.dimy/2, 0})
    end
 
@@ -773,10 +761,12 @@ function Player:update()
    wall_rate = wall_rate + wall_accel * dt
 
    wall_distance = wall_distance + (wall_rate - player_rate) * dt
-   if wall_distance > -50 then
-      death_wall:enable(wall_distance)
-   else
-      death_wall:disable()
+   if game_state ~= LOAD then
+      if wall_distance > -50 then
+         death_wall:enable(wall_distance)
+      else
+         death_wall:disable()
+      end
    end
 end
 
@@ -879,9 +869,8 @@ All you need to do now is escape alive.]]
 
    local spawn_harvester = function(pos, kind)
       local ship = kind(pos)
-      local center_brain = SeekBrain({screen_width/2, screen_height/2})
-      center_brain.max_speed = 100
-      center_brain.max_force = 100
+      local center_brain = SeekBrain(ship, {screen_width/2, screen_height/2})
+      center_brain:params({speed_max = 100, force_max = 100 })
       ship:go():vel({0,0})
       ship.long_lived = true
       ship.brain = center_brain
@@ -912,7 +901,8 @@ All you need to do now is escape alive.]]
       function()
          text_chunk(story[3])()
          for ii=1,25 do
-            Bullet({screen_width + 100+ii*100, ii*100}, {brain=HomingBrain()})
+            local bullet = Bullet({screen_width + 100+ii*100, ii*100})
+            bullet.brain = HomingBrain(bullet)
          end
       end,
       text_chunk(story[4]),
@@ -930,7 +920,9 @@ function game_main()
    spawner = Spawner(1, {Pawn, Pawn, Pawn, Boss})
    stars:set_vel({-player_rate, 0}, {-0.5 * player_rate, 0})
 
-   death_wall = DeathWall()
+   if game_state ~= LOAD then
+      death_wall = DeathWall()
+   end
 end
 
 function level_init()
@@ -938,12 +930,16 @@ function level_init()
    math.randomseed(os.time())
    util.install_basic_keymap()
 
+   center_go = world:create_go()
+   center_go:pos({screen_width/2, screen_height/2})
+
    local expl = {'resources/expl1.ogg', 'resources/expl3.ogg'}
    load_sfx('expl', expl)
    exploder = ExplosionManager(5)
    bthruster = BThrusterManager(40)
 
-   if not LOAD_TEST then
+   if game_state ~= LOAD then
+      game_state = stash:get('mode', 'story')
       start_music()
    end
 
@@ -954,10 +950,11 @@ function level_init()
 
    local mains = {
       story = story_main,
-      game = game_main
+      game = game_main,
+      load = game_main
    }
 
-   local main = mains[stash:get('mode', 'story')]
+   local main = mains[game_state]
    main()
 end
 
