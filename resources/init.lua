@@ -8,9 +8,10 @@ local Timer = require 'Timer'
 local DynO = require 'DynO'
 local ATLAS = 'resources/default'
 local stash = require 'stash'
+local profiler = require 'profiler'
 
 local LOAD = 'load'
-local game_state -- = LOAD -- load testing
+local game_state --= LOAD -- load testing
 
 local Stars
 local Thruster
@@ -475,7 +476,6 @@ function HomingBrain:init(dyno)
    self.force_max = 300
    self.speed_max = 1000
 
-   local params = self:steering_params()
    self.brain = world:create_object('PursuitBrain')
    self:go():add_component('CBrain', {brain=self.brain})
    self:target(nil)
@@ -614,7 +614,7 @@ function Enemy:init(pos, art)
    go:angle(math.pi/2)
    self.sprite = go:add_component('CStaticSprite', {entry=_art,
                                                     angle_offset=math.pi/2})
-
+   self.script:frame_skip(5)
    self.brain = SimpletonBrain(self, {-200, 0}, 10)
    self:add_collider({fixture={type='rect', w=self.dimx, h=self.dimy}})
 end
@@ -926,6 +926,8 @@ function game_main()
 end
 
 function level_init()
+   --profiler.execute(3600)
+
    world:gravity({0,0})
    math.randomseed(os.time())
    util.install_basic_keymap()
